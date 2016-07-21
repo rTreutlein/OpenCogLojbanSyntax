@@ -248,6 +248,7 @@ genInstance typeS = Iso (\(e,s) ->
     where ff n (Link "InheritanceLink" [b,_] _) = n == b
           ff n a = False
 
+{-
 andExpansion :: Iso Atom Atom
 andExpansion = Iso (\a -> atomMap a)
 
@@ -262,11 +263,12 @@ addLink :: s -> Linked a b -> Linked a b
 addLink e (NotLinked a) = Linked a e a
 addLink e (Linked a b l) = Linked a b $ addLink e l
 
-func :: NotLinked [Atom] String -> Atom -> Linked [Atom] String
+func :: Linked [Atom] String -> Atom -> Linked [Atom] String
 func al@(NotLinked a) (Link "AndLink" [e1,e2] noTv) = Linked (a:e1) "AndLink" $ addElem e2 al
 func al@(Linked a1 b l) (Link "AndLink" [e1,e2] noTv) =
     Linked (a1:e1) "AndLink" $ addElem e2 al
 func l b = addElem b l
+-}
 
 --Various semi-isos to easily parse/print Certain Atom types
 _eval :: Iso (Atom,[Atom]) Atom
