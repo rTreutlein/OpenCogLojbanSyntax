@@ -1,59 +1,39 @@
 {-# LANGUAGE LambdaCase                 #-}
-module OpenCog.Lojban where
+module OpenCog.Lojban
+    ( lojbanToAtomese
+    , atomeseToLojban
+    , WordList
+    ) where
+
 
 import OpenCog.Lojban.Syntax
 import OpenCog.Lojban.Util
 
-import Text.Syntax.Parser.Naive
-import qualified Text.Syntax.Printer.Naive as P
-
 import OpenCog.AtomSpace
+
 import Foreign.C
 import Foreign.Ptr
 import Control.Monad.IO.Class
+import Control.Monad.Trans.Reader
 import System.Random
 import Data.Char (chr)
+import qualified Data.Map as M
 
-foreign export ccall "lojbanToAtomese"
-    c_lojbanToAtomese :: Ptr AtomSpaceRef -> UUID -> IO (UUID)
+import Text.Syntax.Parser.Naive
+import qualified Text.Syntax.Printer.Naive as P
 
-c_lojbanToAtomese = exportFunction lojbanToAtomese
-
-foreign export ccall "atomeseToLojban"
-    c_atomeseToLojban :: Ptr AtomSpaceRef -> UUID -> IO (UUID)
-
-c_atomeseToLojban = exportFunction atomeseToLojban
-
-lojbanToAtomese :: Atom -> AtomSpace Atom
-lojbanToAtomese (LL [SL []])         = return $ cSL []
-lojbanToAtomese (LL [SL [CN text ]]) = do
-    atom <- liftIO $ post $ head $ parse preti text
+lojbanToAtomese :: WordList -> String -> IO Atom
+lojbanToAtomese state text = do
+    atom <- post $ head $ parse (runReaderT preti state) text
     let anchor = case atom of
                     (Link "SatisfactionLink" _ _) -> "QuestionAnchor"
                     (Link "PutLink" _ _) -> "QuestionAnchor"
                     _ -> "StatementAnchor"
-    return $ Link "ListLink" [Node "AnchorNode" anchor noTv,atom] noTv
-lojbanToAtomese a = error $ "input was in the wrong format, expecting a ConceptNode got:" ++ show a
+    return $ cLL [cAN anchor,atom]
 
-atomeseToLojban :: Atom -> AtomSpace Atom
-atomeseToLojban a@(LL [SL [SL s]]) = do
-    liftIO $ print a
-    let (Just lojban) = P.print preti $ head s
-    return $ cLL [cAN "LojbanAnswer"
-            ,cCN lojban noTv
-            ]
-atomeseToLojban a@(LL [SL [sat]]) = do
-    liftIO $ print a
-    mtv <- evaluate sat
-    let lojban = case mtv of
-            Just tv -> tvToLojban tv
-            Nothing -> "mi na djuno (this might be an error)"
-    return $ cLL [cAN "LojbanAnswer"
-            ,cCN lojban noTv
-            ]
-atomeseToLojban a = do
-    liftIO $ print a
-    return $ cSL []
+atomeseToLojban :: WordList -> Atom -> String
+atomeseToLojban state a@(LL [SL [SL s]]) = res
+    where (Just res) = P.print (runReaderT preti state) $ head s
 
 tvToLojban :: TruthVal -> String
 tvToLojban tv
