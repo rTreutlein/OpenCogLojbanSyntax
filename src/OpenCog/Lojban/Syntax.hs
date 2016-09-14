@@ -34,6 +34,9 @@ import Debug.Trace
 mytrace a = traceShow a a
 mytrace2 s a = trace (s ++(' ':show a)) a
 
+--Todo 
+-- quantifiers
+
 type WordList = (M.Map String [String],[String])
 type MyReader a = forall delta. Syntax delta => ReaderT WordList delta a
 
@@ -210,6 +213,9 @@ ma = varInstance . reorder0 . node <$> pure "VariableNode" <*> (string "ma") <*>
 kohaP :: MyReader (Atom,[Atom])
 kohaP = ma <|> kohaP1
 
+goiP :: MyReader (Atom,[Atom])
+goiP = ptp (sepSelmaho "GOI") goiToNoi noiP
+
 --This Handles relative phrases
 noiP :: MyReader (Atom,[Atom])
 noiP = sepSelmaho "NOI" *> bridi <* optSelmaho "KUhO"
@@ -217,7 +223,7 @@ noiP = sepSelmaho "NOI" *> bridi <* optSelmaho "KUhO"
 --This handles unconected sumti with optional relative phrases
 sumti :: MyReader (Atom,[Atom])
 sumti =  ((kehaToSesku . handelNOI) ||| id) . ifJustB
-      <$> (kohaP <|> leP <|> laP <|> liP) <*> optional noiP
+      <$> (kohaP <|> leP <|> laP <|> liP) <*> optional (noiP <|> goiP)
     where handelNOI = Iso (\((a,b),(c,d)) -> Just (a,c:d++b))
                           (\(a,c:b) -> Just ((a,b),(c,b)))
 
