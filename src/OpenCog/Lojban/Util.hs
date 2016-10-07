@@ -3,6 +3,12 @@ module OpenCog.Lojban.Util where
 
 import OpenCog.AtomSpace
 
+mapFst :: (a -> b) -> (a,c) -> (b,c)
+mapFst f (a,c) = (f a,c)
+
+mapSnd :: (a -> b) -> (c,a) -> (c,b)
+mapSnd f (c,a) = (c,f a)
+
 --Move this to the Haskell Bindings
 --Allows easy mapping over the Nodes inside of a link
 atomMap :: (Atom -> Atom) -> Atom -> Atom
@@ -19,14 +25,21 @@ atomFold :: (a -> Atom -> a) -> a -> Atom -> a
 atomFold f v (Link t ls tv) = foldl (atomFold f) v ls
 atomFold f v n@(Node _ _ _) = f v n
 
+atomElem :: Atom -> Atom -> Bool
+atomElem n@(Node _ _ _) a@(Node _ _ _) = n == a
+atomElem n@(Node _ _ _) a@(Link _ _ _) =
+    atomFold (\b a -> a == n || b) False a
+atomElem n@(Link _ _ _) _ = error "Expecting a Node"
+
+atomToList :: Atom -> [Atom]
+atomToList n@(Node _ _ _) = [n]
+atomToList (Link _ ls _)  = concatMap atomToList ls
+
 highTv :: TruthVal
 highTv = stv 1 0.9
 
 lowTv :: TruthVal
 lowTv = stv 0.000001 0.01
-
-replace :: Eq a => [a] -> [a] -> [a] -> [a]
-replace old new = join new . split old
 
 if' :: Bool -> a -> a -> a
 if' True a _ = a

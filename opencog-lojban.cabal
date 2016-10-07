@@ -17,6 +17,7 @@ library
   exposed-modules:     OpenCog.Lojban
   other-modules:       OpenCog.Lojban.Syntax
                        , OpenCog.Lojban.Util
+                       , OpenCog.Lojban.WordList
   build-depends:       base >= 4.7 && < 5
                        , opencog-atomspace
                        , invertible-syntax
@@ -26,18 +27,27 @@ library
                        , random
                        , containers
                        , transformers
+                       , hxt
+                       , split
   default-language:    Haskell2010
 
 executable lojbanChatBot
   hs-source-dirs:      app
   main-is:             Main.hs
   other-modules:       Main.Atoms
-                     , Main.Lojban
   build-depends:       base
                      , opencog-atomspace
                      , opencog-lojban
                      , transformers
-                     , hxt
                      , containers
   default-language:    Haskell2010
 
+Test-Suite lojban-test
+  hs-source-dirs:      test
+  main-is:             Main.hs
+  type:                exitcode-stdio-1.0
+  build-depends:       base
+                     , opencog-atomspace
+                     , opencog-lojban
+  default-language:    Haskell2010
+  ghc-options:      -threaded

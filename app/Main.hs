@@ -14,19 +14,21 @@ import Control.Monad
 import Control.Monad.IO.Class
 import Control.Exception
 
-import Main.Lojban
-import Main.Atoms
-
 main :: IO ()
 main = do
-    wordlist <- loadWordLists
-    mainloop wordlist
+    (parser,printer) <- initParserPrinter
+    mainloop parser printer
 
-mainloop :: WordList -> IO ()
-mainloop wordlist= do
+mainloop parser printer = do
     putStrLn "Please Input some Lojban to Translate"
     input <- getLine
-    (res :: Either SomeException Atom) <- try $ lojbanToAtomese wordlist input
+    (res :: Either SomeException Atom) <- try $ parser input
     print res
-    mainloop wordlist
-
+    mainloop parser printer
+    {-case res of
+        Left _ -> mainloop parser printer
+        Right atom -> do
+            (res2 :: Either SomeException String) <- try $ printer atom
+            print res2
+            mainloop parser printer
+-}

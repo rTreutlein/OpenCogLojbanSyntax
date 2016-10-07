@@ -1,13 +1,12 @@
 {-# LANGUAGE LambdaCase                 #-}
 module OpenCog.Lojban
-    ( lojbanToAtomese
-    , atomeseToLojban
-    , WordList
+    ( initParserPrinter
     ) where
 
 
 import OpenCog.Lojban.Syntax
 import OpenCog.Lojban.Util
+import OpenCog.Lojban.WordList
 
 import OpenCog.AtomSpace
 
@@ -22,6 +21,11 @@ import qualified Data.Map as M
 import Text.Syntax.Parser.Naive
 import qualified Text.Syntax.Printer.Naive as P
 
+initParserPrinter :: IO (String -> IO Atom, Atom -> IO String)
+initParserPrinter = do
+    wordlist <- loadWordLists
+    return (lojbanToAtomese wordlist,atomeseToLojban wordlist)
+
 lojbanToAtomese :: WordList -> String -> IO Atom
 lojbanToAtomese state text = do
     atom <- post $ head $ parse (runReaderT preti state) text
@@ -31,9 +35,10 @@ lojbanToAtomese state text = do
                     _ -> "StatementAnchor"
     return $ cLL [cAN anchor,atom]
 
-atomeseToLojban :: WordList -> Atom -> String
-atomeseToLojban state a@(LL [SL [SL s]]) = res
-    where (Just res) = P.print (runReaderT preti state) $ head s
+atomeseToLojban :: WordList -> Atom -> IO String
+atomeseToLojban state a@(LL [an,s]) = do
+    let (Just res) = P.print (runReaderT preti state) s
+    return res
 
 tvToLojban :: TruthVal -> String
 tvToLojban tv
