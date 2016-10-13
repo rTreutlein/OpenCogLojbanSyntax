@@ -13,7 +13,7 @@ import Data.Char
 --import Data.Foldable
 import qualified Data.Foldable as F
 import Data.List (partition,isPrefixOf,nub,any,intercalate)
-import Data.List.Split (splitOn)
+import qualified Data.List.Split as S
 import Data.Maybe (fromJust)
 import System.IO.Unsafe
 import qualified Control.Arrow as A
@@ -42,10 +42,10 @@ mytrace2 s a = trace (s ++(' ':show a)) a
 --The firs element of the tuple is a Atom that is part of the main Sentence/Link
 --The List are other atoms which have to be added to the Atomspace or are needed for printing
 type State a = (a,[Atom])
-type AtomState = (State Atom)
 type Tag = String
-type Sumti = (Atom,Maybe Tag)
-type Selbri = (Atom,Maybe Tag)
+type Sumti = Tagged Atom
+type Selbri = (String,Atom) --STring represents TV
+type Tagged a = (a,Maybe Tag)
 
 type WordList = (M.Map String [String],[String],[(String,String)])
 type SyntaxReader a = forall delta. Syntax delta => ReaderT WordList delta a
@@ -65,12 +65,14 @@ instance ProductFunctor f => ProductFunctor (ReaderT a f) where
 instance Alternative f => Alternative (ReaderT a f) where
     a <|> b
         = ReaderT (\e -> runReaderT a e <|> runReaderT b e)
-    empty = ReaderT (\e -> empty)
+    a <||> b
+        = ReaderT (\e -> runReaderT a e <||> runReaderT b e)
+    empty = ReaderT (const empty)
 
 instance Syntax f => Syntax (ReaderT a f) where
     pure x = ReaderT (\e -> pure x)
-    token  = ReaderT (\e -> token)
-    withText r = ReaderT (\e -> withText $ runReaderT r e)
+    token  = ReaderT (const token)
+    withText r = ReaderT (withText . runReaderT r)
     ptp r1 iso r2 = ReaderT (\e -> ptp (runReaderT r1 e) iso (runReaderT r2 e))
 
 $(defineIsomorphisms ''Atom)
@@ -98,9 +100,34 @@ stateMany p = (first cons <$> p <&> stateMany p) <|> pure ([],[])
 
 stateMany1 :: (Eq alpha,Syntax delta) => delta (State alpha)
                                       -> delta (State [alpha])
-stateMany1 p = (first cons <$> p <&> stateMany p)
+stateMany1 p = first cons <$> p <&> stateMany p
 
+stateList :: Iso [State a] (State [a])
+stateList = foldl ff . init
+    where ff = Iso (Just . f) (Just . g)
+          f ((a,xs),(b,ys)) = (b:a,xs++ys)
+          g (b:a,xs) = ((a,xs),(b,xs))
+          init = Iso (\ls -> Just (([],[]),ls))
+                     (\(_,ls) -> Just ls)
 
+collapsState :: Iso (State (State a)) (State a)
+collapsState = Iso (Just . f) (Just . g) where
+    f ((a,ys),xs) = (a,xs++ys)
+    g (a,xs) = ((a,xs),xs)
+
+filterState :: Iso (State Sumti) (State Sumti)
+filterState = Iso f g where
+    f           = apply id
+    g ((a,t),s) = Just ((a,t),getDefinitons [a] s)
+
+getDefinitons :: [Atom] -> [Atom] -> [Atom]
+getDefinitons ns ls = if ns == nns then links else getDefinitons nns ls
+    where links = filter ff ls
+          nodes = concatMap atomToList links
+          nns   = nub $ ns ++ nodes
+          ff l = any (`atomElem` l) ns
+
+------------------------------------------------------------------------
 letter, digit :: Syntax delta => delta Char
 letter  =  subset isLetter <$> token
 digit   =  subset isDigit <$> token
@@ -113,7 +140,7 @@ word = many1 letter <* optSpace
 
 --Handling for simple Strings
 string :: Syntax delta => String -> delta String
-string [] = nil <$> pure () <* optext " "
+string [] =  pure [] <* optext " "
 string (x:xs) = cons <$> (subset (== x) <$> token) <*> string xs
 
 mytext :: Syntax delta => String -> delta ()
@@ -137,8 +164,15 @@ sepSelmaho s = ReaderT (\(cmavo,_,_) -> oneOf mytext $ cmavo M.! s)
 optSelmaho :: String -> SyntaxReader ()
 optSelmaho s = ReaderT (\(cmavo,_,_) -> oneOf optext $ cmavo M.! s)
 
+-------------------------------------
+
+_UI :: SyntaxReader (State Atom)
+_UI = selmaho "UI"
+
 gismu :: SyntaxReader (Atom,[Atom])
-gismu = implicationOf . reorder0 . node <$> pure "PredicateNode" <*> gismu_ <*> pure lowTv
+gismu = implicationOf 0 . reorder0 . node <$> pure "PredicateNode"
+                                          <*> gismu_
+                                          <*> pure lowTv
     where gismu_ = ReaderT (\(_,gismus,_) -> oneOf string gismus)
 
 --Handles addtional arguments in a leP
@@ -151,36 +185,28 @@ pureVarNode = pure ((Node "VariableNode" "$var" noTv,Nothing),[])
 
 --Handles anykind of LE phrases
 -- State (s,(v,[a]))
+--TODO: consdier distinctions of defferent words in LE
 leP :: SyntaxReader (Atom,[Atom])
-leP = instanceOf
-    . first (_ssl . handleTAG . handleBE) <$> sepSelmaho "LE"
-                                           *> selbri
-                                          <&> pureVarNode
-                                          <&> (optState <$> optional beP)
-                                          <* optSelmaho "KU"
-
-
-
-handleTAG :: Iso (Selbri,[Sumti]) (Atom,[Sumti])
-handleTAG = handleTAGupdater . second tagger
-    where handleTAGupdater = Iso (Just . f) (Just . g)
-          f ((s,Nothing),args) = (s,args)
-          f ((s,Just u) ,args) = (s,map (mapf u) args)
-          g (s,args)           = ((s,Nothing),args)
-          mapf u = mapSnd $ (=<<) $ apply (tagUpdater u)
+leP = first (_ssl . second handleBE) <$> sepSelmaho "LE"
+                                      *> selbri
+                                     <&> pureVarNode
+                                     <&> (optState <$> optional beP)
+                                     <* optSelmaho "KU"
 
 -- ((Pred,S),[Args]) -> ((pred,[args]),S)
 -- ((Pred,S),([Args],Maybe [(Arg,S2)]) -> ((pred,[args]),S)
 
-handleBE :: Iso (Selbri,(Sumti,Maybe [Sumti])) (Selbri,[Sumti])
-handleBE = Iso (\(p,(a,mas)) -> case mas of
-                                    Just as -> Just (p,a:as)
-                                    Nothing -> Just (p,[a]))
-               (\(p,a:as) -> Just (p,(a,Just as)))
+handleBE :: Iso (Sumti,Maybe [Sumti]) [Sumti]
+handleBE = Iso (\(a,mas) -> case mas of
+                               Just as -> Just $ a:as
+                               Nothing -> Just [a])
+               (\(a:as)  -> if as == []
+                               then Just (a,Nothing)
+                               else Just (a,Just as))
 
 --Handle anykind of LA phrase
 laP :: SyntaxReader (Atom,[Atom])
-laP = instanceOf . handleName . node <$> sepSelmaho "LA" *> pure "ConceptNode" <*> word <*> pure lowTv  <* optSelmaho "KU"
+laP = handleName . node <$> sepSelmaho "LA" *> pure "ConceptNode" <*> word <*> pure lowTv  <* optSelmaho "KU"
 
 handleName :: Iso Atom (Atom,[Atom])
 handleName = Iso (\a -> let c = cCN "rand" lowTv
@@ -194,19 +220,22 @@ liP = sepSelmaho "LI" *> (xo <|> paP) <* optSelmaho "LOhO"
 
 paP :: SyntaxReader (Atom,[Atom])
 paP =  reorder0 . node <$> pure "NumberNode"
-    <*> (intToString . paToNum <$> many1 (selmaho "PA"))
+    <*> (intToString <$> pa)
     <*> pure lowTv
+
+pa :: SyntaxReader Int
+pa = paToNum <$> many1 (selmaho "PA")
 
 xo :: SyntaxReader (Atom,[Atom])
 xo = reorder0 . node <$> pure "VariableNode"
-    <*> (string "xo")
+    <*> string "xo"
     <*> pure lowTv
 
 intToString :: (Read a, Show a) => Iso a String
-intToString = Iso (\a -> Just $ show a) (\a -> Just $ read a) where
+intToString = Iso (Just . show) (Just . read)
 
 paToNum :: Iso [String] Int
-paToNum = foldl ff . (first $ inverse $ ignore 0) . commute . unit
+paToNum = foldl ff . first (inverse $ ignore 0) . commute . unit
 
 ff :: Iso (Int,String) Int
 ff = splitLastDigit . second _paToNum
@@ -229,14 +258,14 @@ mkSynonymIso ls = Iso f g where
 
 --Handels all pronouns
 kohaP1 :: SyntaxReader (Atom,[Atom])
-kohaP1 = instanceOf . reorder0 . node <$> pure "ConceptNode"
-                                      <*> selmaho "KOhA"
-                                      <*> pure lowTv
+kohaP1 = reorder0 . node <$> pure "ConceptNode"
+                         <*> selmaho "KOhA"
+                         <*> pure lowTv
 
 --Special case for the prounoun ma
 --It is a fill the blank question so needs to be a Variable Node
 ma :: Syntax delta => delta (Atom,[Atom])
-ma = varInstance . reorder0 . node <$> pure "VariableNode" <*> (string "ma") <*> pure noTv
+ma = reorder0 . node <$> pure "VariableNode" <*> string "ma" <*> pure noTv
 
 --KohaPharse for any kind of Pro-Noune
 kohaP :: SyntaxReader (Atom,[Atom])
@@ -261,21 +290,21 @@ goiToNoi = mkSynonymIso goinoi
 --This handles unconected sumti with optional relative phrases
 sumti :: SyntaxReader (Atom,[Atom])
 sumti =  ((kehaToSesku . handleNOI) ||| id) . ifJustB
-      <$> (kohaP <|> leP <|> laP <|> liP) <*> optional (noiP <|> goiP)
+      <$> (kohaP <|> leP <|> laP <|> liP) <*> optional2 (noiP <|> goiP)
     where handleNOI = Iso (\((a,b),(c,d)) -> Just (a,c:d++b))
                           (\(a,c:b) -> Just ((a,b),(c,b)))
 
 --If we have a relative clause
 --this will switch the ke'a with the actually concept
-kehaToSesku :: Iso AtomState AtomState
+kehaToSesku :: Iso (State Atom) (State Atom)
 kehaToSesku = Iso (\(c,l) -> let nl = map (f kea c) l
-                             in case nl == l of
-                                 False -> Just (c,nl)
-                                 True  -> Nothing)
+                             in if nl == l
+                                 then Just (c,nl)
+                                 else Nothing)
                   (\(c,l) -> let nl = map (f c kea) l
-                             in case nl == l of
-                                 False -> Just (c,nl)
-                                 True  -> Nothing)
+                             in if nl == l
+                                 then Just (c,nl)
+                                 else Nothing)
     where kea = Node "ConceptNode" "ke'a" lowTv
           f a b l@(Link "InheritanceLink" [x,c] tv)
             | c == a = Link "InheritanceLink" [x,b] tv
@@ -302,25 +331,60 @@ faToPlace = mkSynonymIso [("fa","1")
                          ,("fo","4")
                          ,("fu","5")]
 
-fihoP :: SyntaxReader (State Selbri)
+fihoP :: SyntaxReader (State (Tagged Selbri))
 fihoP = sepSelmaho "FIhO" *> selbri <* optSelmaho "FEhU"
 
-baiP :: SyntaxReader (State Selbri)
+baiP :: SyntaxReader (State (Tagged Selbri))
 baiP = ReaderT (\wl@(_,_,btf) -> runReaderT (_bai btf) wl)
     where _bai btf = ptp (selmaho "BAI") (mkSynonymIso btf) selbri
 
 modalSumti :: SyntaxReader (State Sumti)
 modalSumti = reorder . first handleFIhO <$> (fihoP <|> baiP)
-                                        <&> sumtiP --XXX maybe use sumtiC and init Empty Tag
+                                        <&> sumtiP --TODO maybe use sumtiC and init Empty Tag
     where handleFIhO = (fi'otag &&& _frame) . second (inverse tolist1)
                                             . handleTAG . second tolist1
           fi'otag = Iso (Just . f) (Just . g)
-          f (PN name,(s,Just tag)) = (s,Just $ name++tag)
-          g (s,Just nametag) = let name = take (length nametag - 1) nametag
-                                   tag  = drop (length nametag - 1) nametag
-                               in (cPN name lowTv,(s,Just tag))
+          f ((tv,PN name),(s,Just tag)) = (s,Just $ name++tag++tv)
+          g (s,Just nametag) = let [name,tag,tv] = S.split (S.oneOf "12345") nametag
+                               in ((tv,cPN name lowTv),(s,Just tag))
           reorder = Iso (\((a,b),c) -> Just (a,b: c))
                         (\ (a,b: c) -> Just ((a,b),c))
+
+
+quantifiedSumti :: SyntaxReader (State Sumti)
+quantifiedSumti = (ptp (pa <*> selbri) id (ptp pa addLE _quantifiedSumti))
+                  <|> _quantifiedSumti
+    where addLE = Iso (Just . f) (Just . g)
+          f s = s ++ " lo "
+          g s = take (length s - 4) s
+
+
+
+--(Maybe pa,(Atom,Tag))
+--State (State Atom,Tag)
+_quantifiedSumti :: SyntaxReader (State Sumti)
+_quantifiedSumti = reorder
+                . first ((handleQ ||| handleNQ) . ifJustA)
+                <$> opPa
+                <&> sumtiAll
+
+    where handleQ = first (first andl . stateList . isoTake . second extraInstance) . associate
+          handleNQ = first (instanceOf 0 . reorder0)
+          opPa = optState <$> optional (reorder0 <$> pa)
+          reorder = Iso f g
+          f (((a,s1),t),s2) = Just ((a,t),s1++s2)
+          g ((a,t),s)       = Just (((a,s),t),s)
+
+isoTake :: Iso (Int,[a]) [a]
+isoTake = Iso f g where
+    f (i,ls) = Just $ take i ls
+    g ls = Just (length ls,ls)
+
+extraInstance :: Iso Atom [State Atom]
+extraInstance = Iso f g where
+    f a = Just $ map (\x -> fromJust $ apply (instanceOf x . reorder0) a) [0..]
+    g [] = error "Should never be empty"
+    g (a:_) = unapply (instanceOf 0 . reorder0) a
 
 sumtiAll :: SyntaxReader (State Sumti)
 sumtiAll = filterState <$> modalSumti <|> sumtiP
@@ -333,97 +397,34 @@ handleNU = Iso f g where
     f ((atom,as),name) = let pred = cPN name lowTv
                              link = mkCtxPre pred atom
                          in Just (pred,link:as)
-    g (PN name,(CtxPred atom):as) = Just ((atom,as),name)
+    g (PN name,CtxPred atom : as) = Just ((atom,as),name)
     g _ = Nothing
 
-selbri :: SyntaxReader (State Selbri)
-selbri = filterState . first commute . associate <$> optional (selmaho "SE")
-                                                 <*> (gismu <|> nuP)
+_NAhE :: SyntaxReader (State String)
+_NAhE = reorder0 <$> (selmaho "NAhE" <|> pure "")
 
-{-handleSE :: Iso (Maybe s,Atom) Atom
-handleSE = Iso f g where
-    f (Just s,PN name) = Just (cPN (s++name) lowTv)
-    f (Nothing,a)      = Just a
-    g (PN name) | isSE name = Just (Just take 2 name,cPN (drop 2 name) lowTv)
-        | otherwise = Just (Nothing,a)
-    isSE name = foldr (\e b -> b || isPrefixOf e name) False ["se","te","ve","xe"]
-    getSE name = take 2 name
--}
-tagUpdater :: String -> Iso Tag Tag
-tagUpdater "se" = mkSynonymIso [("1","2"),("2","1")]
-tagUpdater "te" = mkSynonymIso [("1","3"),("3","1")]
-tagUpdater "ve" = mkSynonymIso [("1","4"),("4","1")]
-tagUpdater "xe" = mkSynonymIso [("1","5"),("5","1")]
-
--- alpha ([(Atom,String)],String,M.Map String Bool)
-
-tagger :: Iso [(Atom,Maybe String)] [(Atom,Maybe String)]
-tagger = post . foldl tagOne . init
-    where init = Iso (\a     -> Just (([],("0",startMap)),a))
-                     (\(_,a) -> Just a)
-          startMap = M.fromList [("1",True),("2",True),("3",True),("4",True),("5",True)]
-          post = Iso (\(l,(_,_)) -> Just l)
-                     (\l         -> Just (l,(show $ length l,M.empty)))
-          tagOne = Iso (Just . f) (Just . g)
-          f ((r,(p,u)),(a,Just s))
-            | length s >  1 = ((a,Just s):r,(p,u))
-            | length s == 1 = ((a,Just s):r,(s,M.update (\_ -> Just False) s u))
-          f ((r,(p,u)),(a,Nothing)) =
-                              ((a,Just t):r,(t,M.update (\_ -> Just False) t u))
-                where next s = show (read s + 1)
-                      t = findNext p
-                      findNext s = let t = next s
-                                   in if u M.! t then t else findNext t
-          g ((a,Just s):r,(p,u))
-            | length s >  1 = ((r,(p     ,u)), (a,Just s ))
-            | s == p        = ((r,(prev p,u)), (a,Nothing))
-            | otherwise     = ((r,(prev p,u)), (a,Just s ))
-                where prev s = show (read s - 1 )
-
-
-{-handleSE :: Iso (Maybe String,(Atom,[Atom])) (Atom,[Atom])
-handleSE = Iso f g where
-    f (m,(a@(PN name),as)) =
-      case m of
-          Nothing -> Just (a,as)
-                        Just se ->
-                            let link = equSE name se
-                                seName = se ++ name
-                            in Just (cPN seName lowTv,link:as)
-    g (a@(PN seName),as) =
-      case isSE seName of
-          False -> Just (Nothing,(a,as))
-                        True  ->
-                            let name = drop 2 seName
-                                se   = take 2 seName
-                            in Just (Just se,(cPN name lowTv,as))
-    isSE name = foldr (\e b -> b || isPrefixOf e name) False ["se","te","ve","xe"]
-
-equSE pred se =
-  Link "EquivalenceLink"
-        [ cLamdaL noTv varList
-            (cEvalL highTv (cPN pred        lowTv) (varList))
-            , cLamdaL noTv varList
-            (cEvalL highTv (cPN (se++pred)  lowTv) (seList se))
-        ] highTv
-    where varList = createVarList 5
-          seList "se" = cVL [cVN "2",cVN "1",cVN "3",cVN "4",cVN "5"]
-          seList "te" = cVL [cVN "3",cVN "2",cVN "1",cVN "4",cVN "5"]
-          seList "ve" = cVL [cVN "4",cVN "2",cVN "3",cVN "1",cVN "5"]
-          seList "xe" = cVL [cVN "5",cVN "2",cVN "3",cVN "4",cVN "1"]
-
-createVarList n = cVL $ varNodes 1
-    where varNodes i | i == n     = [cVN (show n)]
-              | otherwise  = cVN (show i) : varNodes (i+1)-}
+_selbri :: SyntaxReader (State (Tagged Atom))
+_selbri = filterState . first commute . associate <$> optional2 (selmaho "SE")
+                                                  <*> (gismu <|> nuP)
+selbri :: SyntaxReader (State (Tagged Selbri))
+selbri = first associate <$> _NAhE <&> _selbri
 
 _PU :: SyntaxReader (State Atom)
 _PU = reorder0 . concept <$> selmaho "PU"
 
+_ZI :: SyntaxReader (State Atom)
+_ZI = reorder0 . concept <$> selmaho "ZI"
+
+_trati :: SyntaxReader (State (Maybe Atom))
+_trati = first handleTrati <$> stateMany (_PU <|> _ZI)
+    where handleTrati = Iso (Just . f) (Just . g)
+          f [] = Nothing
+          f xs = apply andl xs
+          g Nothing   = []
+          g (Just xs) = fromJust $ unapply andl xs
+
 _NA :: SyntaxReader (State String)
 _NA = reorder0 <$> selmaho "NA"
-
-_NAhE :: SyntaxReader (State String)
-_NAhE = reorder0 . concept <$> (selmaho "NAhE" <|> pure "")
 
 naheToTV :: Iso String TruthVal
 naheToTV = mkSynonymIso [("je'a",stv 1    0.9)
@@ -435,13 +436,12 @@ naheToTV = mkSynonymIso [("je'a",stv 1    0.9)
 --THis Handles compelte sentences
 -- Remark: Handle the modal Sumti before handleBRIDI
 bridi :: SyntaxReader (Atom,[Atom])
-bridi = handleBRIDI . first mergeSumti <$> (stateMany1 sumtiAll)
+bridi = handleBRIDI . first mergeSumti <$> stateMany1 quantifiedSumti
                                        <*   optext "cu"
-                                       <&> (optState <$> optional _PU)
-                                       <&> (optState <$> optional _NA)
-                                       <&> _NAhE
+                                       <&> _trati
+                                       <&> (optState <$> optional2 _NA)
                                        <&> selbri
-                                       <&> (stateMany sumtiAll)
+                                       <&> stateMany quantifiedSumti
 
 partitionIso :: (a -> Bool) -> Iso [a] ([a],[a])
 partitionIso p = Iso f g where
@@ -454,12 +454,12 @@ partitionIso p = Iso f g where
 -- ((mp,(ma,(s,a))),as)
 -- (bridi,as)
 
-handleBRIDI :: Iso ((Maybe Atom,(Maybe String,(Selbri,[Sumti]))),[Atom]) (Atom,[Atom])
+handleBRIDI :: Iso ((Maybe Atom,(Maybe String,(Tagged Selbri,[Sumti]))),[Atom]) (Atom,[Atom])
 handleBRIDI = first $ handleNA
                     . second _ctx
                     . inverse associate
                     . first commute
-                    . second (_frames . handleTAG)
+                    . second _frames
                     . associate
 
 -- ((MPU,(MNA,(Selbri,Args)))   ,Atoms)
@@ -470,10 +470,10 @@ handleBRIDI = first $ handleNA
 -- ((MNA,MCtxL)                 ,Atoms)
 -- (bridi                       ,Atoms)
 
-handleNA :: Iso (Maybe String,Atom) (Atom)
+handleNA :: Iso (Maybe String,Atom) Atom
 handleNA = Iso f g where
     f (Nothing,a)    = Just a
-    f (Just n, a)    = apply _eval ((cGPN n lowTv),[a])
+    f (Just n, a)    = apply _eval (cGPN n lowTv,[a])
     g (EvalL (GPN n) a) = Just (Just n,a)
     g a = Just (Nothing,a)
 
@@ -491,7 +491,7 @@ preti = ((_satl . associate) ||| handleMa) . ifJustA <$> optional (string "xu") 
     where handleMa =
               Iso (\(a,s) ->
                     let x = atomFold (\r a -> r || isMa a) False a
-                        isMa (Node "VariableNode" x noTv) = not $ x == "$var"
+                        isMa (Node "VariableNode" x noTv) = x /= "$var"
                         isMa _ = False
                         all = Link "ListLink" (a:s) noTv
                         na = Link "PutLink" [all,Link "GetLink" [all] noTv] noTv
@@ -502,23 +502,10 @@ preti = ((_satl . associate) ||| handleMa) . ifJustA <$> optional (string "xu") 
 
 
 
-filterState :: Iso (State (Atom,Maybe Tag)) (State (Atom,Maybe Tag))
-filterState = Iso f g where
-    f           = apply id
-    g ((a,t),s) = Just ((a,t),getDefinitons [a] s)
-
-getDefinitons :: [Atom] -> [Atom] -> [Atom]
-getDefinitons ns ls = if ns == nns then links else getDefinitons nns ls
-    where links = filter ff ls
-          nodes = concatMap atomToList links
-          nns   = nub $ ns ++ nodes
-          ff l = any id $ map (\x -> atomElem x l) ns
-
-
 --Arrow Helpers
 
-second a = (id *** a)
-first  a = (a *** id)
+second a = id *** a
+first  a = a *** id
 
 --For dealing with maybes from/for Optional in the first or second position
 ifJustA :: Iso (Maybe a,b) (Either (a,b) b)
@@ -527,7 +514,7 @@ ifJustA = Iso (\case {(Just a,b) -> Just $ Left (a,b) ; (Nothing,b) -> Just $  R
 
 ifJustB :: Iso (a,Maybe b) (Either (a,b) a)
 ifJustB = Iso (\case {(a,Just b) -> Just $ Left (a,b) ; (a,Nothing) -> Just $  Right a})
-              (\case {Left (a,b) -> Just $ (a,Just b) ;  Right a  -> Just $ (a,Nothing)})
+              (\case {Left (a,b) -> Just (a,Just b) ;  Right a  -> Just (a,Nothing)})
 
 --For converting elements or tuples into lists
 --Lists are needed as arguments to form Link Atoms
@@ -543,29 +530,29 @@ tolist2 = Iso (\(a1,a2) -> Just [a1,a2])
 --Many of the Iso take/result in (Atom,[Atom])
 --The following reorder functions merge the list of Atoms into 1
 --And creates a tuple with all the single Atoms in the first element of the tuple
-reorder0 :: Iso a (a,[Atom])
+reorder0 :: Iso a (State a)
 reorder0 = Iso (\a -> Just (a,[]))
                (\(a,_) -> Just a)
 
 --Most pronouns are instances of a more general concept
 --This will create the inheritance link to show this relation
-instanceOf :: Iso AtomState AtomState
-instanceOf = genInstance "ConceptNode" "InheritanceLink"
+instanceOf :: Int -> Iso (State Atom) (State Atom)
+instanceOf = genInstance "InheritanceLink"
 
-varInstance :: Iso AtomState AtomState
-varInstance = genInstance "VariableNode" "InheritanceLink"
+implicationOf :: Int -> Iso (State Atom) (State Atom)
+implicationOf = genInstance "ImplicationLink"
 
-implicationOf :: Iso AtomState AtomState
-implicationOf = genInstance "PredicateNode" "ImplicationLink"
-
-genInstance :: String -> String -> Iso AtomState AtomState
-genInstance typeS typeL = Iso (\(e,s) ->
-                      let i = Node typeS ("rand"++ show e) noTv
-                          l = Link typeL [i,e] highTv
-                      in Just (i,l:s))
-                 (\(n,ls) ->  (\(Link _ [_,i] _) -> (i,ls)) `fmap` F.find (ff n) ls)
-    where ff n (Link "InheritanceLink" [b,_] _) = n == b
-          ff n a = False
+genInstance :: String -> Int -> Iso (State Atom) (State Atom)
+genInstance typeL num = Iso f g where
+    f (e@(Node typeS _ _),s) = let i = Node typeS ("rand"++ show e ++ show num) noTv
+                                   l = Link typeL [i,e] highTv
+                               in Just (i,l:s)
+    f (e,s) = let i = Node "ConceptNode" ("rand"++ show e ++ show num) noTv
+                  l = Link typeL [i,e] highTv
+              in Just (i,l:s)
+    g (n,ls) =  (\(Link _ [_,i] _) -> (i,ls)) `fmap` F.find (ff n) ls
+    ff n (Link "InheritanceLink" [b,_] _) = n == b
+    ff n a = False
 
 {-
 andExpansion :: Iso Atom Atom
@@ -597,36 +584,78 @@ mapIso iso = Iso f g where
     f = mapM $ apply iso
     g = mapM $ unapply iso
 
-_frames :: Iso (Atom,[Sumti]) Atom
-_frames = andl . mapIso _frame . isoZip . reorder
+_frames :: Iso (Tagged Selbri,[Sumti]) Atom
+_frames = andl . mapIso _frame . isoZip . reorder . handleTAG
     where reorder = Iso f g
-          f (a,b)     = Just ((replicate (length b) a),b)
-          g ((a:_),b) = Just (a,b)
+          f (a,b)     = Just (replicate (length b) a,b)
+          g (a:_,b) = Just (a,b)
 
-_frame :: Iso (Atom,(Atom,Maybe Tag)) Atom
-_frame = _eval . (_frame_pred *** tolist2) . reorder
+handleTAG :: Iso (Tagged Selbri,[Sumti]) (Selbri,[Sumti])
+handleTAG = handleTAGupdater . second tagger
+    where handleTAGupdater = Iso (Just . f) (Just . g)
+          f ((s,Nothing),args) = (s,args)
+          f ((s,Just u) ,args) = (s,map (mapf u) args)
+          g (s,args)           = ((s,Nothing),args)
+          mapf u = mapSnd $ (=<<) $ apply (tagUpdater u)
+
+tagUpdater :: String -> Iso Tag Tag
+tagUpdater "se" = mkSynonymIso [("1","2"),("2","1")]
+tagUpdater "te" = mkSynonymIso [("1","3"),("3","1")]
+tagUpdater "ve" = mkSynonymIso [("1","4"),("4","1")]
+tagUpdater "xe" = mkSynonymIso [("1","5"),("5","1")]
+
+--Get the argumetn location of all Sumties
+tagger :: Iso [(Atom,Maybe String)] [(Atom,Maybe String)]
+tagger = post . foldl tagOne . init
+    where init = Iso (\a     -> Just (([],("0",startMap)),a))
+                     (\(_,a) -> Just a)
+          startMap = M.fromList [("1",True),("2",True),("3",True),("4",True),("5",True)]
+          post = Iso (\(l,(_,_)) -> Just l)
+                     (\l         -> Just (l,(show $ length l,M.empty)))
+          tagOne = Iso (Just . f) (Just . g)
+          f ((r,(p,u)),(a,Just s))
+            | length s >  1 = ((a,Just s):r,(p,u))
+            | length s == 1 = ((a,Just s):r,(s,M.update (\_ -> Just False) s u))
+          f ((r,(p,u)),(a,Nothing)) =
+                              ((a,Just t):r,(t,M.update (\_ -> Just False) t u))
+                where next s = show (read s + 1)
+                      t = findNext p
+                      findNext s = let t = next s
+                                   in if u M.! t then t else findNext t
+          g ((a,Just s):r,(p,u))
+            | length s >  1 = ((r,(p     ,u)), (a,Just s ))
+            | s == p        = ((r,(prev p,u)), (a,Nothing))
+            | otherwise     = ((r,(prev p,u)), (a,Just s ))
+                where prev s = show (read s - 1 )
+
+--        Iso       Selbri          Stumti       Atom
+_frame :: Iso ((String,Atom),(Atom,Maybe Tag)) Atom
+_frame = _evalTv . (naheToTV *** (_framePred *** tolist2)) . reorder
     where reorder = Iso f g
-          f (s,(a,Just t))= Just ((s,t),(s,a))
-          g ((s,t),(_,a)) = Just (s,(a,Just t))
+          f ((tv,s),(a,Just t)) = Just (tv,((s,t),(s,a)))
+          g (tv,((s,t),(_,a)))  = Just ((tv,s),(a,Just t))
 
-_frame_pred :: Iso (Atom,Tag) Atom
-_frame_pred = predicate . toName "_sumti". tolist2 . first (inverse predicate)
+_framePred :: Iso (Atom,Tag) Atom
+_framePred = predicate . toName "_sumti". tolist2 . first (inverse predicate)
 
 toName :: String -> Iso [String] String
-toName = (\x -> Iso (Just . intercalate x) (Just . splitOn x))
+toName x = Iso (Just . intercalate x) (Just . S.splitOn x)
 
 --Various semi-isos to easily transfrom Certain Atom types
 
 _eval :: Iso (Atom,[Atom]) Atom
-_eval = eval . tolist2 . (second list)
+_eval = eval . tolist2 . second list
+
+_evalTv :: Iso (TruthVal,(Atom,[Atom])) Atom
+_evalTv = evalTv . second (tolist2 . second list)
 
 _ctx :: Iso (Maybe Atom,Atom) Atom
 _ctx = ((ctx . tolist2) ||| id) . ifJustA
 
 _ctxold :: Iso (Atom,(Atom,[Atom])) Atom
-_ctxold = ctx . tolist2 . (second _eval)
+_ctxold = ctx . tolist2 . second _eval
 
-_ssl :: Iso (Atom,[Sumti]) Atom
+_ssl :: Iso (Tagged Selbri,[Sumti]) Atom
 _ssl = ssl . tolist2 . addVarNode . _frames
 
 addVarNode :: Iso Atom (Atom,Atom)
@@ -644,6 +673,9 @@ ctx = linkIso "ContextLink" noTv
 
 eval :: Iso [Atom] Atom
 eval = linkIso "EvaluationLink" noTv
+
+evalTv :: Iso (TruthVal,[Atom]) Atom
+evalTv = linkIso2 "EvaluationLink"
 
 ssl :: Iso [Atom] Atom
 ssl = linkIso "SatisfyingSetLink" noTv
@@ -664,16 +696,22 @@ conLink = Iso (\(s,args) -> case s of
                         e -> Nothing)
 
 linkIso :: String -> TruthVal -> Iso [Atom] Atom
-linkIso n t = link . (Iso (\l -> Just (n,(l,t)))
-                          (\(an,(l,at)) -> case an == n of
-                                            True -> Just l
-                                            False -> Nothing))
+linkIso n t = link . Iso (\l -> Just (n,(l,t)))
+                         (\(an,(l,at)) -> if an == n
+                                           then Just l
+                                           else Nothing)
+
+linkIso2 :: String -> Iso (TruthVal,[Atom]) Atom
+linkIso2 n = link . Iso (\(t,l) -> Just (n,(l,t)))
+                        (\(an,(l,t)) -> if an == n
+                                          then Just (t,l)
+                                          else Nothing)
 
 nodeIso :: String -> TruthVal -> Iso String Atom
-nodeIso n t = node . (Iso (\l -> Just (n,(l,t)))
-                          (\(an,(l,at)) -> case an == n of
-                                            True -> Just l
-                                            False -> Nothing))
+nodeIso n t = node . Iso (\l -> Just (n,(l,t)))
+                         (\(an,(l,at)) -> if an == n
+                                           then Just l
+                                           else Nothing)
 concept :: Iso String Atom
 concept = nodeIso "ConceptNode" noTv
 
