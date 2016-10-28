@@ -19,11 +19,6 @@ import Control.Category (id,(.))
 
 import Control.Isomorphism.Partial
 
-import Text.XML.HXT.Core
+import Data.Maybe
 
-
-myinit = do
-    wordlist <- loadWordLists
-    let myparse x y = parse (runReaderT x wordlist) y
-        myprint x y = print (runReaderT x wordlist) y
-    return (myparse,myprint)
+--import Text.XML.HXT.Core

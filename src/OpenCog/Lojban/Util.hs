@@ -9,32 +9,6 @@ mapFst f (a,c) = (f a,c)
 mapSnd :: (a -> b) -> (c,a) -> (c,b)
 mapSnd f (c,a) = (c,f a)
 
---Move this to the Haskell Bindings
---Allows easy mapping over the Nodes inside of a link
-atomMap :: (Atom -> Atom) -> Atom -> Atom
-atomMap f (Link t ls tv) = Link t (map (atomMap f) ls) tv
-atomMap f n@(Node _ _ _) = f n
-
-atomMapM :: Monad m => (Atom -> m Atom) -> Atom -> m Atom
-atomMapM f (Link t ls tv) = do
-    nls <- (mapM (atomMapM f) ls)
-    pure $ Link t nls tv
-atomMapM f n@(Node _ _ _) = f n
-
-atomFold :: (a -> Atom -> a) -> a -> Atom -> a
-atomFold f v (Link t ls tv) = foldl (atomFold f) v ls
-atomFold f v n@(Node _ _ _) = f v n
-
-atomElem :: Atom -> Atom -> Bool
-atomElem n@(Node _ _ _) a@(Node _ _ _) = n == a
-atomElem n@(Node _ _ _) a@(Link _ _ _) =
-    atomFold (\b a -> a == n || b) False a
-atomElem n@(Link _ _ _) _ = error "Expecting a Node"
-
-atomToList :: Atom -> [Atom]
-atomToList n@(Node _ _ _) = [n]
-atomToList (Link _ ls _)  = concatMap atomToList ls
-
 highTv :: TruthVal
 highTv = stv 1 0.9
 
@@ -49,6 +23,10 @@ infixr 1 ?
 (?) :: Bool -> a -> a -> a
 (?) = if'
 
+infixl 8 ...
+(...) :: (c -> d) -> (a -> b -> c) -> a -> b -> d
+(...) = (.).(.)
+
 pattern CN name <-Node "ConceptNode" name _
 pattern PN name <-Node "PredicateNode" name _
 pattern GPN name <-Node "GroundedPredicateNode" name _
@@ -56,6 +34,8 @@ pattern VN name <-Node "VariableNode" name _
 
 pattern AL l <- Link "AndLink" l _
 pattern LL l <- Link "ListLink" l _
+pattern ImpL l tv <- Link "ImplicationLink" l tv
+pattern InhL l tv <- Link "InheritanceLink" l tv
 pattern SL l <- Link "SetLink" l _
 pattern SSL l <- Link "SatisfyingSetLink" [l] _
 pattern EvalL p a <- Link "EvaluationLink" [p,a] _
@@ -74,9 +54,9 @@ cNN name    = Node "NumberNode" name noTv
 cLL a           = Link "ListLink"                             a     noTv
 cSL a           = Link "SetLink"                              a     noTv
 cVL a           = Link "VariableList"                         a     noTv
-cInL tv a b     = Link "InheritanceLink"                  [a,b]     tv
-cImL tv a b     = Link "ImplicationLink"                  [a,b]     tv
-cIFaoIFL tv a b = Link "AndLink"          [cImL tv a b,cImL tv b a] tv
+cInhL tv a b    = Link "InheritanceLink"                  [a,b]     tv
+cImpL tv a b    = Link "ImplicationLink"                  [a,b]     tv
+cIFaoIFL tv a b = Link "AndLink"          [cImpL tv a b,cImpL tv b a] tv
 cEvalL tv a b   = Link "EvaluationLink"                   [a,b]     tv
 cSSL tv a       = Link "SatisfyingSetLink"                  [a]     tv
 cExL tv a b     = Link "ExistsLink"                       [a,b]     tv

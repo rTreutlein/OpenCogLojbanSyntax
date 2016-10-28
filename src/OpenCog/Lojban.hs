@@ -7,6 +7,7 @@ module OpenCog.Lojban
 import OpenCog.Lojban.Syntax
 import OpenCog.Lojban.Util
 import OpenCog.Lojban.WordList
+import OpenCog.Lojban.Syntax.Types (WordList)
 
 import OpenCog.AtomSpace
 
@@ -14,44 +15,33 @@ import Foreign.C
 import Foreign.Ptr
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Reader
+import Control.Exception
 import System.Random
 import Data.Char (chr)
+import Data.Maybe
 import qualified Data.Map as M
 
 import Text.Syntax.Parser.Naive
 import qualified Text.Syntax.Printer.Naive as P
 
-initParserPrinter :: IO (String -> IO Atom, Atom -> IO String)
+initParserPrinter :: IO (String -> Maybe Atom, Atom -> Maybe String)
 initParserPrinter = do
     wordlist <- loadWordLists
     return (lojbanToAtomese wordlist,atomeseToLojban wordlist)
 
-lojbanToAtomese :: WordList -> String -> IO Atom
-lojbanToAtomese state text = do
-    atom <- post $ head $ parse (runReaderT preti state) text
-    let anchor = case atom of
-                    (Link "SatisfactionLink" _ _) -> "QuestionAnchor"
-                    (Link "PutLink" _ _) -> "QuestionAnchor"
-                    _ -> "StatementAnchor"
-    return $ cLL [cAN anchor,atom]
+lojbanToAtomese :: WordList -> String -> Maybe Atom
+lojbanToAtomese state text =
+    wrapAtom <$> listToMaybe (parse (runReaderT preti state) (text++" "))
 
-atomeseToLojban :: WordList -> Atom -> IO String
-atomeseToLojban state a@(LL [an,s]) = do
-    let (Just res) = P.print (runReaderT preti state) s
-    return res
+wrapAtom :: Atom -> Atom
+wrapAtom atom@(Link "SatisfactionLink" _ _) = cLL [cAN "QuestionAnchor" , atom]
+wrapAtom atom@(Link "PutLink" _ _)          = cLL [cAN "QuestionAnchor" , atom]
+wrapAtom atom                               = cLL [cAN "StatementAnchor", atom]
+
+atomeseToLojban :: WordList -> Atom -> Maybe String
+atomeseToLojban state a@(LL [an,s]) = P.print (runReaderT preti state) s
 
 tvToLojban :: TruthVal -> String
 tvToLojban tv
-    | (tvMean tv) > 0.5 = "go'i"
-    | (tvMean tv) <= 0.5 = "nago'i"
-
-post :: Atom -> IO Atom
-post a = atomMapM (\case {(Node "ConceptNode" "rand" tv) ->
-                            randName >>= (\n -> pure $ Node "ConceptNode" n tv);
-                         e -> pure $ e}) a
-
-randName :: IO String
-randName = do
-    std <- getStdGen
-    let name = take 20 $ map chr $ randomRs (33,126) std
-    pure name
+    | tvMean tv > 0.5 = "go'i"
+    | tvMean tv <= 0.5 = "nago'i"

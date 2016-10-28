@@ -1,10 +1,12 @@
+{-# LANGUAGE ScopedTypeVariables #-}
 module OpenCog.Lojban.WordList where
 
 import Text.XML.HXT.Core
 import qualified Data.Map as M
 import Data.List
+import System.Random
 
-loadWordLists :: IO (M.Map String [String],[String],[(String,String)])
+loadWordLists :: IO (M.Map String [String],[String],[(String,String)],Int)
 loadWordLists = do
     let src = "lojban.xml"
     gismu <- runX (readDocument [] src >>> getChildren >>> getValsi >>> getGismu)
@@ -14,12 +16,14 @@ loadWordLists = do
         f (s,c) = (takeWhile p s,[c])
         p e = e `notElem` "1234567890*"
         src = "/usr/local/share/opencog/lojban.xml"
-    return (selmahos,gismu,map handleBAIprefix bai)
+    (seed :: Int) <- randomIO
+    return (selmahos,gismu,map handleBAIprefix bai,seed)
 
 handleBAIprefix :: (String,String) -> (String,String)
-handleBAIprefix (b,d) = if t2 `elem` se then (b,t2 ++ ' ' : d) else (b,d)
+handleBAIprefix (b,d) = if t2 `elem` se then (b,t2 ++ ' ' : nd) else (b,nd)
     where se = ["se","te","ve","xe"]
           t2 = take 2 b
+          nd = d ++ " " --Parser Expects a space behind every word
 
 getGismu :: ArrowXml a => a XmlTree String
 getGismu = hasAttrValue "type" ((||) <$> (== "gismu") <*>
@@ -52,4 +56,4 @@ getBAI = isCmavo
          >>>
          getAttrValue "word"
          &&&
-         (getChildren >>> hasName "definition" /> getText >>> arr (takeWhile ((/=) ' ')))
+         (getChildren >>> hasName "definition" /> getText >>> arr (takeWhile (' ' /=)))

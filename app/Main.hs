@@ -14,16 +14,31 @@ import Control.Monad
 import Control.Monad.IO.Class
 import Control.Exception
 
+import System.Process
+
 main :: IO ()
 main = do
     (parser,printer) <- initParserPrinter
     mainloop parser printer
 
+camxesPath = "/home/roman/OpenCog/Lojban/ilmentufa"
+
 mainloop parser printer = do
     putStrLn "Please Input some Lojban to Translate"
     input <- getLine
-    (res :: Either SomeException Atom) <- try $ parser input
-    print res
+
+    let args = "run_camxes.js -std -m N \"" ++ input ++ "\""
+    camxesres <-
+        readCreateProcess (shell $ "node " ++ args){cwd = Just camxesPath
+                                                   ,std_out = CreatePipe} ""
+    putStrLn camxesres
+
+    let res = parser input
+
+    case res of
+        Just x -> printAtom x
+        Nothing -> putStrLn "Parseing Failed."
+
     mainloop parser printer
     {-case res of
         Left _ -> mainloop parser printer
